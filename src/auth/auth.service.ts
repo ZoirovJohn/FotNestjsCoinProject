@@ -43,15 +43,41 @@ export class AuthService {
     );
   }
 
-  async signup(email: string, password: string, name?: string) {
+  async signup(
+    email: string,
+    password: string,
+    name?: string,
+    ua?: string,
+    ip?: string,
+  ) {
     const existing = await this.users.findByEmail(email.toLowerCase());
     if (existing) throw new BadRequestException('Email already in use');
+
     const hashedPassword = await bcrypt.hash(password, 12);
-    return this.users.create({
+    const user = await this.users.create({
       email: email.toLowerCase(),
       password: hashedPassword,
       name,
     });
+
+    const sid = randomUUID();
+    const accessToken = await this.signAccess(user.id.toString(), user.email);
+    const refreshToken = await this.signRefresh(user.id.toString(), sid);
+
+    const ttlSec = Number(process.env.JWT_REFRESH_TTL || 2592000);
+    await this.sessions.create({
+      userId: user.id.toString(),
+      refreshTokenHash: this.hashCreator(refreshToken),
+      userAgent: ua,
+      ip,
+      expiresAt: new Date(Date.now() + ttlSec * 1000),
+    });
+
+    return {
+      accessToken,
+      refreshToken,
+      user: { id: user.id, email: user.email, name: user.name },
+    };
   }
 
   async login(email: string, password: string, ua?: string, ip?: string) {

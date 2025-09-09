@@ -1,3 +1,4 @@
+// src/auth/auth.controller.ts
 import {
   Body,
   Controller,
@@ -14,14 +15,48 @@ import { AuthService } from './auth.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from '../common/jwt.guard';
+import { log } from 'console';
+
+// ---- cookie helper (no domain on localhost) ----
+function setRtCookie(res: Response, token: string) {
+  const secure = String(process.env.COOKIE_SECURE) === 'true'; // false in local dev (HTTP)
+  const base = {
+    httpOnly: true,
+    secure,
+    sameSite: 'lax' as const,
+    maxAge: Number(process.env.JWT_REFRESH_TTL || 2592000) * 1000, // 30d default
+    path: '/',
+  };
+  const domain = process.env.COOKIE_DOMAIN; // e.g. "example.com" (prod only)
+
+  if (process.env.NODE_ENV === 'production' && domain) {
+    res.cookie('rt', token, { ...base, domain });
+  } else {
+    res.cookie('rt', token, base); // no domain on localhost
+  }
+}
 
 @Controller('auth')
 export class AuthController {
   constructor(private auth: AuthService) {}
 
   @Post('signup')
-  signup(@Body() dto: SignupDto) {
-    return this.auth.signup(dto.email, dto.password, dto.name);
+  async signup(
+    @Body() dto: SignupDto,
+    @Headers('user-agent') ua: string,
+    @Ip() ip: string,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    console.log('AuthController signup called with:', dto);
+    const result = await this.auth.signup(
+      dto.email,
+      dto.password,
+      dto.name,
+      ua,
+      ip,
+    );
+    setRtCookie(res, result.refreshToken);
+    return { accessToken: result.accessToken, user: result.user };
   }
 
   @Post('login')
@@ -31,17 +66,9 @@ export class AuthController {
     @Ip() ip: string,
     @Res({ passthrough: true }) res: Response,
   ) {
+    console.log('AuthController login called with:', { dto, ua, ip });
     const result = await this.auth.login(dto.email, dto.password, ua, ip);
-    const secure = String(process.env.COOKIE_SECURE) === 'true';
-    const domain = process.env.COOKIE_DOMAIN || 'localhost';
-    res.cookie('rt', result.refreshToken, {
-      httpOnly: true,
-      secure,
-      sameSite: 'lax',
-      maxAge: Number(process.env.JWT_REFRESH_TTL || 2592000) * 1000,
-      domain,
-      path: '/',
-    });
+    setRtCookie(res, result.refreshToken);
     return { accessToken: result.accessToken, user: result.user };
   }
 
@@ -54,16 +81,7 @@ export class AuthController {
   ) {
     const old = (req.cookies && (req.cookies as any).rt) || '';
     const result = await this.auth.refresh(old, ua, ip);
-    const secure = String(process.env.COOKIE_SECURE) === 'true';
-    const domain = process.env.COOKIE_DOMAIN || 'localhost';
-    res.cookie('rt', result.refreshToken, {
-      httpOnly: true,
-      secure,
-      sameSite: 'lax',
-      maxAge: Number(process.env.JWT_REFRESH_TTL || 2592000) * 1000,
-      domain,
-      path: '/',
-    });
+    setRtCookie(res, result.refreshToken);
     return { accessToken: result.accessToken };
   }
 
@@ -71,7 +89,13 @@ export class AuthController {
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const rt = (req.cookies && (req.cookies as any).rt) || '';
     await this.auth.logout(rt);
-    res.clearCookie('rt', { path: '/' });
+
+    // Clear cookie (match how it was set)
+    if (process.env.NODE_ENV === 'production' && process.env.COOKIE_DOMAIN) {
+      res.clearCookie('rt', { path: '/', domain: process.env.COOKIE_DOMAIN });
+    } else {
+      res.clearCookie('rt', { path: '/' });
+    }
     return { ok: true };
   }
 
