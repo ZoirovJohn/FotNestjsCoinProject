@@ -21,6 +21,6 @@ async function bootstrap() {
     credentials: true, // required for cookies
   });
 
-  await app.listen(Number(process.env.PORT) || 4000, '0.0.0.0');
+  await app.listen(Number(process.env.PORT) || 3007, '0.0.0.0');
 }
 bootstrap();
